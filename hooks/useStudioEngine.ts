@@ -110,3 +110,88 @@ export const useStudioEngine = () => {
     }
   };
 };
+
+
+onst stopRecording = (): Promise<{ mixed: Blob; vocal: Blob } | null> => {
+    return new Promise((resolve) => {
+      if (!mediaRecorderRef.current || !micRecorderRef.current || !isRecording) {
+        resolve(null);
+        return;
+      }
+
+      setIsProcessing(true);
+      setProcessingProgress(10);
+
+      const recorder = mediaRecorderRef.current;
+      const micRecorder = micRecorderRef.current;
+      const mimeType = recorder.mimeType;
+
+      recorder.onstop = async () => {
+        setProcessingProgress(60);
+        await new Promise(r => setTimeout(r, 200));
+        
+        const mixedBlob = new Blob(chunksRef.current, { type: mimeType });
+        const vocalBlob = new Blob(micChunksRef.current, { type: micRecorder.mimeType });
+        
+        setProcessingProgress(100);
+
+        if (mixedBlob.size < 500) {
+          toast.error("Recording failed: No data captured.");
+          setIsProcessing(false);
+          resolve(null);
+          return;
+        }
+        
+        // Cleanup
+        if (backingTrackSourceRef.current) {
+          try { backingTrackSourceRef.current.stop(); } catch (e) {}
+          backingTrackSourceRef.current = null;
+        }
+        if (micSourceRef.current) {
+          micSourceRef.current.disconnect();
+          micSourceRef.current = null;
+        }
+        if (timerRef.current) clearInterval(timerRef.current);
+        
+        setIsRecording(false);
+        setTimeout(() => {
+          setIsProcessing(false);
+          resolve({ mixed: mixedBlob, vocal: vocalBlob });
+        }, 300);
+      };
+
+      recorder.stop();
+      micRecorder.stop();
+    });
+  };
+
+  // Sync gain nodes with state
+  useEffect(() => {
+    if (backingTrackGainRef.current) {
+      backingTrackGainRef.current.gain.setTargetAtTime(backingTrackVolume, audioContextRef.current!.currentTime, 0.1);
+    }
+  }, [backingTrackVolume]);
+
+  useEffect(() => {
+    if (micGainRef.current) {
+      micGainRef.current.gain.setTargetAtTime(micVolume, audioContextRef.current!.currentTime, 0.1);
+    }
+  }, [micVolume]);
+
+  return {
+    isReady,
+    isRecording,
+    isProcessing,
+    processingProgress,
+    recordingTime,
+    backingTrackBuffer,
+    backingTrackVolume,
+    micVolume,
+    setBackingTrackVolume,
+    setMicVolume,
+    loadBackingTrack,
+    loadBackingTrackFromFile,
+    startRecording,
+    stopRecording
+  };
+};
