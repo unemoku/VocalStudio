@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 // ... 各种图标引用 ...
-import { translations, Language } from '../translations'; // 路径要对
+import { translations, Language } from './translations'; // 路径要对
 import { useStudioEngine } from '../hooks/useStudioEngine'; // 路径要对
 import { cn } from '../lib/utils'; // 路径要对
 // ... 其余代码 ...
