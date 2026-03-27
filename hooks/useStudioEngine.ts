@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback } from 'react';
+import { useState, useRef, useEffect } from 'react';
 
 export const useStudioEngine = () => {
   const [isRecording, setIsRecording] = useState(false);
@@ -7,59 +7,68 @@ export const useStudioEngine = () => {
   const [processingProgress, setProcessingProgress] = useState(0);
   const [micVolume, setMicVolume] = useState(1);
   const [backingTrackVolume, setBackingTrackVolume] = useState(0.5);
+  const [backingTrackBuffer, setBackingTrackBuffer] = useState<AudioBuffer | null>(null);
   
   const audioContextRef = useRef<AudioContext | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const backingTrackBufferRef = useRef<AudioBuffer | null>(null);
   const timerRef = useRef<any>(null);
   const chunksRef = useRef<Blob[]>([]);
+  const streamRef = useRef<MediaStream | null>(null);
 
-  // 加载伴奏流
+  // 加载伴奏
   const loadBackingTrack = async (url: string) => {
     if (!url) return;
     try {
       const response = await fetch(url);
       const arrayBuffer = await response.arrayBuffer();
-      audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
-      backingTrackBufferRef.current = await audioContextRef.current.decodeAudioData(arrayBuffer);
+      const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
+      const buffer = await ctx.decodeAudioData(arrayBuffer);
+      setBackingTrackBuffer(buffer);
+      audioContextRef.current = ctx;
     } catch (e) {
-      console.error("加载伴奏失败", e);
+      console.error("Backing track load failed", e);
     }
   };
 
   const startRecording = async (type: 'audio' | 'video') => {
     chunksRef.current = [];
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: type === 'video' });
-    
-    // 这里是核心：创建混音图
+    const stream = await navigator.mediaDevices.getUserMedia({ 
+      audio: { echoCancellation: true, noiseSuppression: true }, 
+      video: type === 'video' 
+    });
+    streamRef.current = stream;
+
     const ctx = new AudioContext();
     audioContextRef.current = ctx;
     const dest = ctx.createMediaStreamDestination();
-    
-    // 接入麦克风并调节音量
+
+    // 麦克风输入
     const micSource = ctx.createMediaStreamSource(stream);
     const micGain = ctx.createGain();
     micGain.gain.value = micVolume;
     micSource.connect(micGain).connect(dest);
 
-    // 如果有伴奏，接入伴奏并调节音量
-    if (backingTrackBufferRef.current) {
+    // 伴奏输入
+    if (backingTrackBuffer) {
       const bSource = ctx.createBufferSource();
-      bSource.buffer = backingTrackBufferRef.current;
+      bSource.buffer = backingTrackBuffer;
       const bGain = ctx.createGain();
       bGain.gain.value = backingTrackVolume;
       bSource.connect(bGain).connect(dest);
       bSource.start(0);
     }
 
+    // 合成流
     const combinedStream = type === 'video' 
       ? new MediaStream([...stream.getVideoTracks(), ...dest.stream.getAudioTracks()])
       : dest.stream;
 
     const recorder = new MediaRecorder(combinedStream);
-    recorder.ondataavailable = (e) => chunksRef.current.push(e.data);
-    recorder.start();
+    recorder.ondataavailable = (e) => {
+      if (e.data.size > 0) chunksRef.current.push(e.data);
+    };
     
+    recorder.start();
     mediaRecorderRef.current = recorder;
     setIsRecording(true);
     setRecordingTime(0);
@@ -67,22 +76,25 @@ export const useStudioEngine = () => {
   };
 
   const stopRecording = async () => {
-    setIsRecording(false);
-    clearInterval(timerRef.current);
-    setIsProcessing(true);
-    setProcessingProgress(20);
-
     return new Promise((resolve) => {
       if (!mediaRecorderRef.current) return resolve(null);
       
+      setIsProcessing(true);
+      setProcessingProgress(30);
+
       mediaRecorderRef.current.onstop = () => {
-        const blob = new Blob(chunksRef.current, { type: 'video/mp4' });
+        const type = mediaRecorderRef.current?.mimeType.includes('video') ? 'video/mp4' : 'audio/wav';
+        const blob = new Blob(chunksRef.current, { type });
         setProcessingProgress(100);
         setTimeout(() => {
           setIsProcessing(false);
-          resolve({ mixed: blob, vocal: blob }); // 简化版返回
+          setIsRecording(false);
+          clearInterval(timerRef.current);
+          streamRef.current?.getTracks().forEach(t => t.stop());
+          resolve({ mixed: blob, vocal: blob }); 
         }, 500);
       };
+
       mediaRecorderRef.current.stop();
     });
   };
@@ -91,7 +103,10 @@ export const useStudioEngine = () => {
     isRecording, recordingTime, isProcessing, processingProgress,
     micVolume, setMicVolume, backingTrackVolume, setBackingTrackVolume,
     startRecording, stopRecording, loadBackingTrack,
-    backingTrackBuffer: backingTrackBufferRef.current,
-    loadBackingTrackFromFile: (file: File) => {} // 简化的占位
+    backingTrackBuffer,
+    loadBackingTrackFromFile: (file: File) => {
+      const url = URL.createObjectURL(file);
+      loadBackingTrack(url);
+    }
   };
 };
